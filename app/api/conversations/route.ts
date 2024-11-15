@@ -80,7 +80,22 @@ export async function GET(request: Request) {
             createdAt: 'desc',
           },
           take: 1,
+          include: {
+            sender: true
+          }
         },
+        _count: {
+          select: {
+            messages: {
+              where: {
+                read: false,
+                senderId: {
+                  not: userId
+                }
+              }
+            }
+          }
+        }
       },
     });
 
@@ -89,6 +104,43 @@ export async function GET(request: Request) {
     console.error('Get conversations error:', error);
     return NextResponse.json(
       { error: 'Error fetching conversations' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const conversationId = searchParams.get('conversationId');
+
+    if (!conversationId) {
+      return NextResponse.json(
+        { error: 'Conversation ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Delete all related messages first
+    await prisma.message.deleteMany({
+      where: { conversationId },
+    });
+
+    // Delete all participants
+    await prisma.conversationParticipant.deleteMany({
+      where: { conversationId },
+    });
+
+    // Delete the conversation
+    await prisma.conversation.delete({
+      where: { id: conversationId },
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Delete conversation error:', error);
+    return NextResponse.json(
+      { error: 'Error deleting conversation' },
       { status: 500 }
     );
   }

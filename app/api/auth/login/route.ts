@@ -1,6 +1,8 @@
 import { PrismaClient } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
+import { cookies } from 'next/headers';
+import { createToken } from '@/app/utils/auth';
 
 const prisma = new PrismaClient();
 
@@ -38,6 +40,18 @@ export async function POST(request: Request) {
       lastName: user.lastName,
       active: user.active
     };
+
+    // Create JWT token
+    const token = await createToken({ userId: safeUser.id, email: safeUser.email });
+
+    // Set HTTP-only cookie
+    const cookieStore = await cookies();
+    cookieStore.set('auth_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 86400 // 24 hours
+    });
 
     return NextResponse.json(safeUser);
   } catch (error) {

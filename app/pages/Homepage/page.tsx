@@ -21,6 +21,9 @@ interface Chat {
     };
   }[];
   messages: Message[];
+  _count: {
+    messages: number;
+  };
 }
 
 interface Message {
@@ -40,42 +43,59 @@ export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<User[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [eventSource, setEventSource] = useState<EventSource | null>(null);
 
   // Load user data and chats
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-      return;
-    }
-    const userData = JSON.parse(storedUser);
-    setUser(userData);
-    loadChats(userData.id);
+    const fetchUser = async () => {
+      try {
+        const response = await fetch('/api/auth/me');
+        if (!response.ok) {
+          throw new Error('Not authenticated');
+        }
+        const userData = await response.json();
+        setUser(userData);
+        loadChats(userData.id);
+      } catch (error) {
+        console.error('Auth error:', error);
+        router.push('/');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchUser();
   }, [router]);
 
   const loadChats = async (userId: string) => {
     try {
+      console.log('Loading chats for user:', userId);
       const response = await fetch(`/api/conversations?userId=${userId}`);
       const data = await response.json();
-      if (response.ok) {
-        setChats(data);
+      console.log('Chats response:', data);
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load chats');
       }
+      
+      setChats(data);
     } catch (error) {
       console.error('Error loading chats:', error);
+      setChats([]); // Set empty array on error
     }
   };
 
-  const loadMessages = async (conversationId: string) => {
-    try {
-      const response = await fetch(`/api/messages?conversationId=${conversationId}`);
-      const data = await response.json();
-      if (response.ok) {
-        setMessages(data);
-      }
-    } catch (error) {
-      console.error('Error loading messages:', error);
-    }
-  };
+  // const loadMessages = async (conversationId: string) => {
+  //   try {
+  //     const response = await fetch(`/api/messages?conversationId=${conversationId}`);
+  //     const data = await response.json();
+  //     if (response.ok) {
+  //       setMessages(data);
+  //     }
+  //   } catch (error) {
+  //     console.error('Error loading messages:', error);
+  //   }
+  // };
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
@@ -99,40 +119,89 @@ export default function HomePage() {
   };
 
   const startNewChat = async (otherUser: User) => {
+    if (!user?.id) {
+      console.error('No user found');
+      return;
+    }
+
     try {
+      const participantIds = [user.id, otherUser.id];
+      console.log('Creating chat with participants:', participantIds);
+
       const response = await fetch('/api/conversations', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          participantIds: [user?.id, otherUser.id],
-        }),
+        body: JSON.stringify({ participantIds }),
       });
 
-      const data = await response.json();
-      if (response.ok) {
-        setChats([...chats, data]);
-        setSelectedChat(data.id);
-        setSearchQuery('');
-        setSearchResults([]);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to create chat');
       }
+
+      const data = await response.json();
+      console.log('Chat created successfully:', data);
+      
+      setChats(prevChats => [...prevChats, data]);
+      setSelectedChat(data.id);
+      setSearchQuery('');
+      setSearchResults([]);
     } catch (error) {
       console.error('Error creating chat:', error);
+      // You might want to show this error to the user
+      // setError(error instanceof Error ? error.message : 'Failed to create chat');
     }
   };
 
-  const handleChatSelect = (chatId: string) => {
+  const handleChatSelect = async (chatId: string) => {
     setSelectedChat(chatId);
-    loadMessages(chatId);
+    
+    // Mark messages as read
+    if (user?.id) {
+      try {
+        await fetch('/api/messages/read', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            conversationId: chatId,
+            userId: user.id
+          }),
+        });
+        
+        setChats(prevChats =>
+          prevChats.map(chat =>
+            chat.id === chatId
+              ? { ...chat, _count: { messages: 0 } }
+              : chat
+          )
+        );
+      } catch (error) {
+        console.error('Error marking messages as read:', error);
+      }
+    }
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !selectedChat || !user) return;
 
+    const tempMessage = {
+      id: Date.now().toString(), // temporary ID
+      content: newMessage,
+      senderId: user.id,
+      timestamp: new Date(),
+    };
+
+    // Optimistically update UI
+    setMessages(prev => [...prev, tempMessage]);
+    setNewMessage('');
+
     try {
-      const response = await fetch('/api/messages', {
+      await fetch('/api/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -144,30 +213,74 @@ export default function HomePage() {
         }),
       });
 
-      const data = await response.json();
-      if (response.ok) {
-        setMessages([...messages, data]);
-        setNewMessage('');
-        // Reload chats to update last message
+      // No need to update messages here as SSE will handle it
+      // Just reload chats to update last message
+      if (user?.id) {
         loadChats(user.id);
       }
     } catch (error) {
       console.error('Error sending message:', error);
+      // Optionally handle error by removing the temporary message
+      setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('user');
-    router.push('/');
+  const handleLogout = async () => {
+    try {
+      // Call logout API endpoint
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+      });
+      
+      // Clear client-side storage
+      localStorage.removeItem('user');
+      
+      // Redirect to login page
+      router.push('/');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   };
 
-  // Add this effect to handle real-time updates
+  const handleDeleteChat = async (chatId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent chat selection when clicking delete
+    
+    if (!confirm('Are you sure you want to delete this conversation?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/conversations?conversationId=${chatId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to delete chat');
+      }
+
+      // Remove chat from state
+      setChats(prevChats => prevChats.filter(chat => chat.id !== chatId));
+      if (selectedChat === chatId) {
+        setSelectedChat(null);
+        setMessages([]);
+      }
+    } catch (error) {
+      console.error('Error deleting chat:', error);
+    }
+  };
+
   useEffect(() => {
-    if (!selectedChat) return;
+    if (!selectedChat) {
+      if (eventSource) {
+        eventSource.close();
+        setEventSource(null);
+      }
+      return;
+    }
 
-    const eventSource = new EventSource(`/api/messages/sse?conversationId=${selectedChat}`);
-
-    eventSource.onmessage = (event) => {
+    const newEventSource = new EventSource(`/api/messages/sse?conversationId=${selectedChat}`);
+    
+    newEventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === 'initial') {
         setMessages(data.messages);
@@ -176,13 +289,20 @@ export default function HomePage() {
       }
     };
 
+    setEventSource(newEventSource);
+
     return () => {
-      eventSource.close();
+      newEventSource.close();
     };
   }, [selectedChat]);
 
-  if (!user) {
+  if (loading) {
     return <LoadingSpinner />;
+  }
+
+  if (!user) {
+    router.push('/');
+    return null;
   }
 
   return (
@@ -240,12 +360,14 @@ export default function HomePage() {
               </div>
             </div>
             <div className="overflow-y-auto h-[calc(100vh-73px)]">
-              {chats.map((chat) => {
+              {/* Remove duplicates by using Set with chat IDs */}
+              {Array.from(new Set(chats.map(chat => chat.id))).map(chatId => {
+                const chat = chats.find(c => c.id === chatId)!;
                 const otherParticipant = chat.participants?.find(
                   (p) => p.user.id !== user?.id
                 )?.user;
-                const lastMessage = chat.messages?.[0]?.content || 'No messages yet';
-                const messageCount = chat.messages?.length || 0;
+                
+                const lastMessage = chat.messages?.[0]?.content ?? 'No messages yet';
 
                 return (
                   <div
@@ -259,11 +381,21 @@ export default function HomePage() {
                       <h3 className="font-semibold text-gray-900">
                         {otherParticipant?.firstName} {otherParticipant?.lastName}
                       </h3>
-                      {messageCount > 0 && (
-                        <span className="bg-blue-500 text-white text-xs px-2 py-1 rounded-full">
-                          {messageCount}
-                        </span>
-                      )}
+                      <div className="flex items-center space-x-2">
+                        {chat._count?.messages > 0 && selectedChat !== chat.id && (
+                          <span className="bg-blue-500 text-white text-xs px-2 py-1 rounded-full">
+                            {chat._count.messages}
+                          </span>
+                        )}
+                        <button
+                          onClick={(e) => handleDeleteChat(chat.id, e)}
+                          className="text-red-500 hover:text-red-700 p-1"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                     <p className="text-sm text-gray-600 mt-1">{lastMessage}</p>
                   </div>

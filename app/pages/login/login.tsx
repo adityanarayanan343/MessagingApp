@@ -30,9 +30,6 @@ export default function LoginPage() {
         throw new Error(data.error || 'Login failed');
       }
 
-      // Store user data in localStorage
-      localStorage.setItem('user', JSON.stringify(data));
-      
       // Redirect to home page
       router.push('/home');
       
