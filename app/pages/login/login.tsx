@@ -27,15 +27,15 @@ export default function LoginPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Login failed');
+        setError(data.error || 'Login failed');
+        return;
       }
 
-      // Redirect to home page
       router.push('/home');
       
     } catch (err) {
       console.error('Login error:', err);
-      setError(err instanceof Error ? err.message : 'Login failed');
+      setError('An error occurred during login. Please try again.');
     }
   };
   

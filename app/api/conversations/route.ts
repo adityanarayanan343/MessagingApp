@@ -113,28 +113,34 @@ export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const conversationId = searchParams.get('conversationId');
+    const userId = searchParams.get('userId');
 
-    if (!conversationId) {
+    if (!conversationId || !userId) {
       return NextResponse.json(
-        { error: 'Conversation ID is required' },
+        { error: 'Conversation ID and User ID are required' },
         { status: 400 }
       );
     }
 
-    // Delete all related messages first
-    await prisma.message.deleteMany({
-      where: { conversationId },
-    });
-
-    // Delete all participants
+    // Remove the user from the conversation participants
     await prisma.conversationParticipant.deleteMany({
+      where: {
+        conversationId,
+        userId,
+      },
+    });
+
+    // Check if there are any participants left
+    const remainingParticipants = await prisma.conversationParticipant.findMany({
       where: { conversationId },
     });
 
-    // Delete the conversation
-    await prisma.conversation.delete({
-      where: { id: conversationId },
-    });
+    // If no participants are left, delete the conversation
+    if (remainingParticipants.length === 0) {
+      await prisma.conversation.delete({
+        where: { id: conversationId },
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -13,6 +13,10 @@ model User {
   password      String
   firstName     String?
   lastName      String?
+  profilePic    String?       // URL to profile picture
+  status        String?       // Custom status message
+  lastSeen      DateTime?     // Last activity timestamp
+  isOnline      Boolean       @default(false)
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   emailVerified DateTime?

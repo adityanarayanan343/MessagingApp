@@ -3,13 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import LoadingSpinner from '../../components/LoadingSpinner';
-
-interface User {
-  id: string;
-  firstName: string | null;
-  lastName: string | null;
-  email: string;
-}
+import Image from 'next/image';
+import ProfileModal from '@/app/components/ProfileModal';
+import { User } from '@/app/types';
 
 interface Chat {
   id: string;
@@ -45,6 +41,7 @@ export default function HomePage() {
   const [isSearching, setIsSearching] = useState(false);
   const [loading, setLoading] = useState(true);
   const [eventSource, setEventSource] = useState<EventSource | null>(null);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   // Load user data and chats
   useEffect(() => {
@@ -201,7 +198,7 @@ export default function HomePage() {
     setNewMessage('');
 
     try {
-      await fetch('/api/messages', {
+      const response = await fetch('/api/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -213,14 +210,20 @@ export default function HomePage() {
         }),
       });
 
-      // No need to update messages here as SSE will handle it
+      if (!response.ok) {
+        throw new Error('Failed to send message');
+      }
+
+      // Remove the temporary message as SSE will handle the update
+      setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
+
       // Just reload chats to update last message
       if (user?.id) {
         loadChats(user.id);
       }
     } catch (error) {
       console.error('Error sending message:', error);
-      // Optionally handle error by removing the temporary message
+      // Remove the temporary message on error
       setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
     }
   };
@@ -296,6 +299,10 @@ export default function HomePage() {
     };
   }, [selectedChat]);
 
+  const handleProfileUpdate = (updatedUser: User) => {
+    setUser(updatedUser);
+  };
+
   if (loading) {
     return <LoadingSpinner />;
   }
@@ -313,9 +320,22 @@ export default function HomePage() {
               <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold text-gray-800">Messages</h1>
                 <div className="flex items-center space-x-4">
-                  <span className="text-sm text-gray-600">
-                    {user.firstName} {user.lastName}
-                  </span>
+                  <button
+                    onClick={() => setIsProfileModalOpen(true)}
+                    className="p-2 text-gray-600 hover:text-gray-800"
+                  >
+                    <Image 
+                      src={user?.profilePic || 'https://t4.ftcdn.net/jpg/02/15/84/43/360_F_215844325_ttX9YiIIyeaR7Ne6EaLLjMAmy4GvPC69.jpg'} 
+                      alt="Profile" 
+                      width={32}
+                      height={32}
+                      className="rounded-full"
+                    />
+                  </button>
+                  <div className="text-sm">
+                    <div className="font-medium">{user?.firstName} {user?.lastName}</div>
+                    <div className="text-xs text-gray-500">{user?.status || 'Set a status'}</div>
+                  </div>
                   <button
                     onClick={handleLogout}
                     className="px-3 py-1 text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md"
@@ -464,6 +484,14 @@ export default function HomePage() {
           </div>
         )}
       </div>
+      {isProfileModalOpen && (
+        <ProfileModal
+          isOpen={isProfileModalOpen}
+          onClose={() => setIsProfileModalOpen(false)}
+          user={user}
+          onUpdate={handleProfileUpdate}
+        />
+      )}
     </div>
   );
 }
